@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <title>SBWorms</title>
+            <script type="text/javascript">
+                window.onload = function () {
+                    MESSAGE_USER_JOINED = 1000;
+                    MESSAGE_USER_LEFT = 1001;
+                    MESSAGE_OWN_INFO = 2000;
+                    MESSAGE_SERVER_UPDATE = 3000;
+                    MESSAGE_GAME_AREA_INFO = 3001;
+                    MESSAGE_NEW_ROUND = 3002;
+                    MESSAGE_USER_INPUT = 5000;
+
+                    PLAYER_STATE_DISCONNECTED = 0;
+                    PLAYER_STATE_CONNECTED = 1;
+                    PLAYER_STATE_WAITING_FOR_NEXT_ROUND = 2;
+                    PLAYER_STATE_PLAYING = 3;
+                    PLAYER_STATE_DIED = 4;
+                    PLAYER_STATE_PAUSE = 5;
+                    PLAYER_STATE_WON = 6;
+
+                    var conn;
+                    var own_id = "";
+                    var own_name = "";
+                    var own_token = "";
+                    var connected = false;
+                    var disconnect_reason = " ";
+                    var log = document.getElementById("log");
+                    var canvas = document.getElementById("screen");
+                    var userinfo = document.getElementById("userinfo");
+                    var userscore = document.getElementById("score");
+                    var waiting = 0;
+                    const rgb2hex = (rgb) => `#${rgb.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/).slice(1).map(n => parseInt(n, 10).toString(16).padStart(2, '0')).join('')}`
+                    const { width, height } = canvas;
+                    const ctx = canvas.getContext('2d');
+
+                    var area_width = 16;
+                    var area_height = 16;
+
+                    var players = [];
+
+                    var needsredraw = true;
+
+                    ctx.fillStyle = "black";
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    // --------------------------------------------------
+                    function appendLogItem(item) {
+                        var doScroll = log.scrollTop > log.scrollHeight - log.clientHeight - 1;
+                        log.appendChild(item);
+                        if (doScroll) {
+                            log.scrollTop = log.scrollHeight - log.clientHeight;
+                        }
+                    }
+                    // --------------------------------------------------
+                    function appendLog(message){
+                        var item = document.createElement("div");
+                            item.innerHTML = message;
+                        appendLogItem(item)
+                    }
+
+                    function updateScore(){
+                        userscore.innerHTML = '';
+                        if (players.length > 0) {
+                            for (const player of players) {
+                                var item = document.createElement("div");
+                                item.style.color = player.color
+                                item.innerHTML = player.username + " " + player.score.toString();
+                                if (player.state == PLAYER_STATE_DIED)
+                                { 
+                                    item.innerHTML += " (died)";
+                                }
+                                if (player.state == PLAYER_STATE_CONNECTED ||
+                                    player.state == PLAYER_STATE_WAITING_FOR_NEXT_ROUND)
+                                { 
+                                    item.innerHTML += " (waiting)";
+                                }
+                                if (player.state == PLAYER_STATE_WON)
+                                { 
+                                    item.innerHTML += " (won)";
+                                }
+                                userscore.appendChild(item);
+                            }
+                        }
+                        
+                    }
+                    // --------------------------------------------------
+                    function onReceivedMessage(message) {
+                        switch (message.message_type) {
+                            case MESSAGE_USER_JOINED:
+                                appendLog("User " + message.player.username + " joined");
+                                break;
+                            case MESSAGE_USER_LEFT:
+                                appendLog("User " + message.player.username + " left");
+                                break;
+                            case MESSAGE_OWN_INFO:
+                                own_id = message.own_id;
+                                own_token = message.token;
+                                own_name = message.player.username;
+                                userinfo.innerHTML = own_name;
+                                userinfo.style.color = message.player.color;
+                                //appendLog("OwnInfo");
+                                break;
+                            case MESSAGE_GAME_AREA_INFO:
+                                area_width = message.game_area.width;
+                                area_height = message.game_area.height;
+                                //appendLog("GameAreaInfo");
+                                break;
+                            case MESSAGE_SERVER_UPDATE:
+                                //console.log("object: %o", message)
+                                //console.log("message: " + message)
+                                players = message.players
+                                waiting = Math.round(message.waiting / 1000)
+                                //appendLog ("Server Update received")
+                                needsredraw = true;
+                                updateScore();
+                                break;
+                        }
+                    }
+                    // --------------------------------------------------
+                    function redraw() {
+                        if (needsredraw) {
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
+                            if (connected) {
+                                var own_player_died = false
+                                var has_won = false
+                                var player_won = ""
+                                
+                                // Draw all the good stuff here :)
+                                ctx.fillStyle = "black";
+                                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                                
+                                var block_width  = canvas.width / area_width;
+                                var block_height = canvas.height / area_height;
+                                //console.log("players: %o", players)
+
+                                if (players.length > 0) {
+                                    for (const player of players) {
+                                        if (player.id == own_id) {
+                                            if (player.state == PLAYER_STATE_DIED) {
+                                                own_player_died = true;
+                                                console.log("Player died")
+                                            }
+                                        }
+                                        if (player.state == PLAYER_STATE_WON) {
+                                            has_won = true;
+                                            player_won = player.username;
+                                        }
+                                    }
+
+                                    for (const player of players) {
+                                        for (const current_pos of player.positions) {
+                                            ctx.fillStyle = player.color
+                                            ctx.fillRect(
+                                                current_pos.x * (block_width)+block_width/6,  
+                                                current_pos.y * (block_height)+block_height/6,  
+                                                4*(block_width/6),
+                                                4*(block_height/6));
+                                            
+                                            /*if (player.id == own_id) {
+                                                ctx.fillStyle = "black"
+                                                ctx.fillRect(
+                                                    current_pos.x * (block_width) + block_width/3,  
+                                                    current_pos.y * (block_height) + block_height/3,  
+                                                    block_width/3,
+                                                    block_height/3);
+                                            }*/
+                                        }
+
+                                        if (player.id == own_id) {
+                                                ctx.fillStyle = player.color
+                                                ctx.fillRect(
+                                                    player.headpos.x * (block_width),  
+                                                    player.headpos.y * (block_height),  
+                                                    block_width,
+                                                    block_height);
+                                                    ctx.fillStyle = "black"
+                                                ctx.fillRect(
+                                                    player.headpos.x * (block_width) + block_width/3,  
+                                                    player.headpos.y * (block_height) + block_height/3,  
+                                                    block_width/3,
+                                                    block_height/3);
+                                        }
+                                    }
+
+                                    if (own_player_died == true) {
+                                        ctx.fillStyle = "green";
+                                        ctx.textAlign = "center";
+                                        ctx.font = "30px Arial";
+                                        ctx.fillText("YOU DIED", canvas.width/2, canvas.height/2);
+                                    }
+                                }
+
+                                if (waiting>0) {
+                                        ctx.fillStyle = "green";
+                                        ctx.textAlign = "center";
+                                        ctx.font = "30px Arial";
+                                        ctx.fillText(waiting.toString(), canvas.width/2, canvas.height/4);
+                                }
+                                if (has_won) {
+                                    ctx.fillStyle = "green";
+                                    ctx.textAlign = "center";
+                                    ctx.font = "30px Arial";
+                                    ctx.fillText(player_won + " won", canvas.width/2, canvas.height*0.75);    
+                                }
+                               
+
+                            } else {
+                                ctx.fillStyle = "black";
+                                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                                
+                                ctx.fillStyle = "green";
+                                ctx.textAlign = "center";
+                                ctx.font = "30px Arial";
+                                //ctx.fillText("DISCONNECTED (" + disconnect_reason + ")", canvas.width/2, canvas.height/2);
+                                ctx.fillText("DISCONNECTED", canvas.width/2, canvas.height/2);
+                            }
+                            needsredraw = false
+                        }
+                    }
+                    // --------------------------------------------------
+                    function redrawLoop() {
+                        redraw()
+                        window.requestAnimationFrame(redrawLoop);
+                    }
+
+                    function connect_ws() {
+                        conn = new WebSocket("ws://" + document.location.host + "/ws");
+                        conn.onclose = function (evt) {
+                            disconnect_reason = evt.code
+                            connected = false
+                            needsredraw = true
+
+                            setTimeout(function() {
+                                connect_ws();
+                            }, 1000);
+                        };
+
+                        conn.onopen = function (evt) {
+                            connected = true
+                            disconnect_reason = ""
+                            needsredraw = true
+                            //conn.send(JSON.stringify(command))
+                        }
+                        conn.onmessage = function (event) {
+                            var messages = event.data.split('\n');
+                            for (var i = 0; i < messages.length; i++) {
+                                var message = JSON.parse(messages[i]);
+                                onReceivedMessage(message);
+                            }
+                        };
+                    }
+
+                    if (window["WebSocket"]) {
+                        
+                        connect_ws()
+
+                        document.addEventListener('keydown', (event) => {
+                            if (connected) {
+                                if (event.keyCode === 37||
+                                    event.keyCode === 38||
+                                    event.keyCode === 39||
+                                    event.keyCode === 40 ||
+                                    event.keyCode === 32) {
+                                    conn.send(JSON.stringify({message_type: MESSAGE_USER_INPUT, token: own_token, key: event.keyCode }))
+                                }
+                                // prevent normal arrow functionality
+                                event.preventDefault();
+                            }
+                        });
+
+                        redrawLoop();
+
+                    } else {
+                        var item = document.createElement("div");
+                        item.innerHTML = "<b>Your browser does not support WebSockets.</b>";
+                    }
+};
+</script>
+
+
+<style type="text/css">
+    html {
+        overflow: hidden;
+    }
+
+    body {
+        overflow: hidden;
+        padding: 0;
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: rgb(0, 0, 0);
+    }
+
+    #main {
+        display: flex;
+        flex-wrap: nowrap;
+        height:100%;
+    }
+
+    #log {
+        background: black;
+        color: rgb(0, 255, 0);
+        font-family: 'Courier New', Courier, monospace;
+        padding-left: 10px;
+        height : 128;
+        overflow: auto;
+    }
+    #score {
+        background: black;
+        color: rgb(0, 255, 0);
+        font-family: 'Courier New', Courier, monospace;
+        padding-left: 10px;
+        height : 384px;
+        overflow: auto;
+    }
+
+    #screen {
+        background: gray;
+        border-style: solid;
+        border-color: #00ff00;
+        border-width: 2px;
+        margin-left: 10px;
+    }
+    #all {
+        width: 768px;
+        margin-left: auto;
+        margin-right:auto;
+    }
+
+    #userinfo {
+        color: rgb(0, 255, 0);
+        font-family: 'Courier New', Courier, monospace;
+        margin: 0;
+        padding: 0.5em 0.5em 0.5em 0.5em;
+        top: 0.5em;
+        left: 0.5em;
+        right: 0.5em;
+        overflow: auto;
+        text-align: left;
+    }
+</style>
+</head>
+<body>
+    <!--
+        <canvas id="screen" width="512" height="512"></canvas>
+        <div id="log"></div>
+    -->
+    <div id="all">
+        <div id="userinfo">Your Name</div>
+        <div id="main">
+            <canvas id="screen" width="512" height="512"></canvas>
+            <div id="info">
+                <div id="score"></div>
+                <div id="log"></div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
